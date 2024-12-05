@@ -40,6 +40,14 @@ def save_model(model, step):
     print(f'Saving model parameters to {ckpt_path}')
     torch.save(model, ckpt_path)
 
+def load_model(step):
+    """Load model parameters from checkpoint"""
+    ckpt_path = f'obfuscation_codellama_gen/new_model_{step}.pkl'
+    if os.path.exists(ckpt_path):
+        print(f'Loading model parameters from {ckpt_path}')
+        return torch.load(ckpt_path)
+    return None
+
 
 tokenizer = AutoTokenizer.from_pretrained('codellama/CodeLlama-7b-Instruct-hf')
 llama_model = LlamaForCausalLM.from_pretrained('codellama/CodeLlama-7b-Instruct-hf')
@@ -95,113 +103,118 @@ for epoch_i in range(0, epochs):
 
     print("")
     print('======== Epoch {:} / {:} ========'.format(epoch_i + 1, epochs))
-    print('Training...')
-    llama_model.train()
-    # time for a single epoch
-    t0 = time.time()
 
-    # reset total loss for each epoch
-    total_train_loss = 0
-    ans_ls = []
-    ground_truth_ls = []
-    for step, batch in enumerate(tqdm(train_loader)):
-        # output the progress information
-        if step == step_size:
-            break
-
-        elapsed = format_time(time.time() - t0)
-        print('Loss = {:} Elapsed: {:}.'.format(total_train_loss, elapsed))
+    # Check if saved model exists for this step_size
+    saved_embeddings = load_model(step_size)
+    if saved_embeddings is not None:
+        print(f"Found saved model for step_size {step_size}, skipping training...")
+        llama_model.model.init_perturb()
+        llama_model.model.perturb_embeddings = saved_embeddings
+    else:
+        print('Training...')
+        llama_model.train()
+        t0 = time.time()
         total_train_loss = 0
-
-        
-
-
-        input_ids = batch[0].to(device)
-        input_mask = batch[1].to(device)
-        target_ids = batch[2].to(device)
-        code_mask = batch[3].to(device)
-        if len(input_ids[0]) > 1000:
-            continue
-
-
-        optimizer = torch.optim.AdamW([llama_model.model.perturb_embeddings],
-                        lr = 0.002, # args.learning_rate - default is 5e-5
-                        eps = 1e-8 # args.adam_epsilon  - default is 1e-8
-                        )
-        min_loss = 100000
-        final_copy_ids = None
-        final_copy_emb = None
-        flag = 0
-        for ii in range(10):
-            # reset grad
-            llama_model.zero_grad()  
-            llama_model.model.perturb_embeddings.data = all_emb * mask + llama_model.model.perturb_embeddings.data * (1 - mask)
-            llama_model.model.get_perturb(input_ids)          # .emb = .perturb_embeddings[] lookup
-            copy_emb = llama_model.model.emb.clone().detach() # save .emb
-                                                              # projects .perturb_embeddings[] on tokens
-            project_emb, nn_indices = nn_project(copy_emb, llama_model.model.embed_tokens, input_ids)
-            nn_indices = nn_indices * (1 - code_mask[0]) + input_ids[0] * code_mask
-            if ii == 0: # prompt & ppl
-                org_sent = tokenizer.decode(input_ids[0], skip_special_tokens=True)
-                idx1 = org_sent.find('Please complete this code from head: \n') + len('Please complete this code from head: \n')
-                idx2 = org_sent.find('please only output the code.')
-                org_sent = org_sent[idx1:idx2]
-                new_sent = tokenizer.decode(nn_indices[0], skip_special_tokens=True)
-                idx1 = new_sent.find('Please complete this code from head: \n') + len('Please complete this code from head: \n')
-                idx2 = new_sent.find('please only output the code.')
-                new_sent = new_sent[idx1:idx2]
-                ppl_org = ppl_model(org_sent)
-                ppl_new = ppl_model(new_sent)
-
-            if ii == 0 and ppl_new > ppl_org * 10: # early stop if ppl grows
-                flag = 1
+        ans_ls = []
+        ground_truth_ls = []
+        for step, batch in enumerate(tqdm(train_loader)):
+            # output the progress information
+            if step == step_size:
                 break
 
-            llama_model.model.emb.data = project_emb.data     # .emb = projected 
+            elapsed = format_time(time.time() - t0)
+            print('Loss = {:} Elapsed: {:}.'.format(total_train_loss, elapsed))
+            total_train_loss = 0
 
-            loss = llama_model(input_ids = input_ids, labels = target_ids).loss
 
-            org_emb = all_emb[input_ids]
-            loss_mse = mse_func(project_emb, org_emb)
-            loss = loss - loss_mse # final loss
-            if loss < min_loss:
-                min_loss = loss
+
+
+            input_ids = batch[0].to(device)
+            input_mask = batch[1].to(device)
+            target_ids = batch[2].to(device)
+            code_mask = batch[3].to(device)
+            if len(input_ids[0]) > 1000:
+                continue
+
+
+            optimizer = torch.optim.AdamW([llama_model.model.perturb_embeddings],
+                            lr = 0.002, # args.learning_rate - default is 5e-5
+                            eps = 1e-8 # args.adam_epsilon  - default is 1e-8
+                            )
+            min_loss = 100000
+            final_copy_ids = None
+            final_copy_emb = None
+            flag = 0
+            for ii in range(10):
+                # reset grad
+                llama_model.zero_grad()
+                llama_model.model.perturb_embeddings.data = all_emb * mask + llama_model.model.perturb_embeddings.data * (1 - mask)
+                llama_model.model.get_perturb(input_ids)          # .emb = .perturb_embeddings[] lookup
+                copy_emb = llama_model.model.emb.clone().detach() # save .emb
+                                                                  # projects .perturb_embeddings[] on tokens
+                project_emb, nn_indices = nn_project(copy_emb, llama_model.model.embed_tokens, input_ids)
+                nn_indices = nn_indices * (1 - code_mask[0]) + input_ids[0] * code_mask
+                if ii == 0: # prompt & ppl
+                    org_sent = tokenizer.decode(input_ids[0], skip_special_tokens=True)
+                    idx1 = org_sent.find('Please complete this code from head: \n') + len('Please complete this code from head: \n')
+                    idx2 = org_sent.find('please only output the code.')
+                    org_sent = org_sent[idx1:idx2]
+                    new_sent = tokenizer.decode(nn_indices[0], skip_special_tokens=True)
+                    idx1 = new_sent.find('Please complete this code from head: \n') + len('Please complete this code from head: \n')
+                    idx2 = new_sent.find('please only output the code.')
+                    new_sent = new_sent[idx1:idx2]
+                    ppl_org = ppl_model(org_sent)
+                    ppl_new = ppl_model(new_sent)
+
+                if ii == 0 and ppl_new > ppl_org * 10: # early stop if ppl grows
+                    flag = 1
+                    break
+
+                llama_model.model.emb.data = project_emb.data     # .emb = projected 
+
+                loss = llama_model(input_ids = input_ids, labels = target_ids).loss
+
+                org_emb = all_emb[input_ids]
+                loss_mse = mse_func(project_emb, org_emb)
+                loss = loss - loss_mse # final loss
+                if loss < min_loss:
+                    min_loss = loss
+                    final_copy_ids = nn_indices
+                    final_copy_emb = copy_emb 
+                # total loss
+                total_train_loss += loss.item()
+                llama_model.model.emb.data = copy_emb.data       # restore .emb (before projection???)
+                # backward
+
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+                # use mask to make sure the first 5 and last 100 are not changed
+                llama_model.model.perturb_embeddings.data = all_emb * mask + llama_model.model.perturb_embeddings.data * (1 - mask)
+
+            if flag == 1:
                 final_copy_ids = nn_indices
-                final_copy_emb = copy_emb 
-            # total loss
-            total_train_loss += loss.item()
-            llama_model.model.emb.data = copy_emb.data       # restore .emb (before projection???)
-            # backward
-
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+                final_copy_ids = input_ids[0] * code_mask[0] + final_copy_ids * (1 - code_mask[0])
+                final_copy_emb = copy_emb
+            else:
+                final_copy_ids = input_ids[0] * code_mask[0] + final_copy_ids * (1 - code_mask[0])
+                for i in range(len(final_copy_ids[0])):
+                    idx = input_ids[0][i].item()
+                    if mask[idx][0] == 0:
+                        llama_model.model.perturb_embeddings[idx].data = final_copy_emb[0][i]
+                    if idx != final_copy_ids[0][i].item():
+                        mask[idx] = 1
+                        all_emb[idx] = final_copy_emb[0][i]
+            # clean the gpu
+            torch.cuda.empty_cache()
+            torch.cuda.empty_cache()
             
-            # use mask to make sure the first 5 and last 100 are not changed
-            llama_model.model.perturb_embeddings.data = all_emb * mask + llama_model.model.perturb_embeddings.data * (1 - mask)
+            # empty cache
+            torch.cuda.empty_cache()
         
-        if flag == 1:
-            final_copy_ids = nn_indices
-            final_copy_ids = input_ids[0] * code_mask[0] + final_copy_ids * (1 - code_mask[0])
-            final_copy_emb = copy_emb
-        else:
-            final_copy_ids = input_ids[0] * code_mask[0] + final_copy_ids * (1 - code_mask[0])
-            for i in range(len(final_copy_ids[0])):
-                idx = input_ids[0][i].item()
-                if mask[idx][0] == 0:
-                    llama_model.model.perturb_embeddings[idx].data = final_copy_emb[0][i]
-                if idx != final_copy_ids[0][i].item():
-                    mask[idx] = 1
-                    all_emb[idx] = final_copy_emb[0][i]
-        # clean the gpu
-        torch.cuda.empty_cache()
-        torch.cuda.empty_cache()
-        
-        # empty cache
-        torch.cuda.empty_cache()
-    
-    # time for a single epoach
-    training_time = format_time(time.time() - t0)
+        # time for a single epoach
+        training_time = format_time(time.time() - t0)
 
     print("")
     save_model(llama_model.model.perturb_embeddings, step_size)

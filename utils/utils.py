@@ -9,7 +9,7 @@ from sentence_transformers.util import (semantic_search,
 import math
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from tree_sitter import Language, Parser
-# from vllm import LLM, SamplingParams
+from vllm import LLM, SamplingParams
 from nltk.stem import WordNetLemmatizer
 import json
 import os

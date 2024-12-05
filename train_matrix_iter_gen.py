@@ -3,7 +3,7 @@ from tqdm import tqdm
 from torch import nn
 import json
 import sys
-# torch.cuda.set_device(0)
+torch.cuda.set_device(0)
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import os
 
@@ -64,7 +64,7 @@ timestamp=datetime.datetime.now().strftime('%Y%m%d%H%M')
 random.seed(seed_val)
 np.random.seed(seed_val)
 torch.manual_seed(seed_val)
-# torch.cuda.manual_seed_all(seed_val)
+torch.cuda.manual_seed_all(seed_val)
 
 epochs = 1
 
@@ -194,11 +194,11 @@ for epoch_i in range(0, epochs):
                     mask[idx] = 1
                     all_emb[idx] = final_copy_emb[0][i]
         # clean the gpu
-        # torch.cuda.empty_cache()
-        # torch.cuda.empty_cache()
+        torch.cuda.empty_cache()
+        torch.cuda.empty_cache()
         
         # empty cache
-        # torch.cuda.empty_cache()        
+        torch.cuda.empty_cache()
     
     # time for a single epoach
     training_time = format_time(time.time() - t0)

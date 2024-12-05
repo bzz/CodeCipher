@@ -216,8 +216,8 @@ for epoch_i in range(0, epochs):
         # time for a single epoach
         training_time = format_time(time.time() - t0)
 
-    print("")
-    save_model(llama_model.model.perturb_embeddings, step_size)
+        print("")
+        save_model(llama_model.model.perturb_embeddings, step_size)
     # ========================================
     #               Validation
     # ========================================
